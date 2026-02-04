@@ -11,22 +11,13 @@ const app = express();
 app.use(cors());
 app.use(express.json({ limit: "1mb" }));
 
-/**
- * ✅ Health
- */
 app.get("/health", (req, res) => {
   res.json({ ok: true });
 });
 
-/**
- * ✅ Routers
- */
 app.use("/public", publicRouter);
 app.use("/internal", internalRouter);
 
-/**
- * ✅ Start
- */
 const port = Number(process.env.API_PORT || 8080);
 
 initTables()
