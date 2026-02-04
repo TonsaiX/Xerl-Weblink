@@ -1,22 +1,24 @@
 /**
  * apps/bot/src/index.js
  * -------------------------------------------------------
- * ✅ Fix intents: ไม่ขอ GuildMembers (กัน disallowed intents)
+ * ✅ Fix intents: ใช้แค่ Guilds (กัน disallowed intents / ไม่ต้องเปิด Message Content)
  * ✅ Fix interactions: deferReply ให้เร็ว และตอบด้วย editReply เท่านั้น (กัน Unknown interaction / ack ซ้ำ)
- * ✅ Fix API error debug: log URL + status + response body
+ * ✅ Fix API error debug: log URL + status + response body แยก field ชัดเจน
  * ✅ Configurable API endpoint: API_SETROLE_PATH
  * ✅ Support API auth: API_KEY / API_TOKEN ส่งเป็น Bearer
  * ✅ Fallback: ถ้า API save ไม่ได้ -> ตั้งค่า role แบบ in-memory ใช้งานได้ทันที
+ * ✅ Add /topic: ตั้ง topic ของห้อง (ต้องมี Manage Channels)
  */
 
 import "dotenv/config";
 import {
   Client,
   GatewayIntentBits,
-  Partials,
   REST,
   Routes,
   SlashCommandBuilder,
+  ChannelType,
+  PermissionFlagsBits,
 } from "discord.js";
 
 /* =======================================================
@@ -29,11 +31,7 @@ const DISCORD_CLIENT_ID = (process.env.DISCORD_CLIENT_ID || "").trim();
 const DISCORD_GUILD_ID = (process.env.DISCORD_GUILD_ID || "").trim();
 
 // ✅ API base (รองรับ 2 ชื่อ) + trim กันช่องว่าง
-const API_BASE_RAW = (
-  process.env.API_BASE ||
-  process.env.API_BASE_URL ||
-  ""
-).trim();
+const API_BASE_RAW = (process.env.API_BASE || process.env.API_BASE_URL || "").trim();
 
 // ✅ ปรับให้ไม่มี / ท้าย เพื่อกัน `//` ตอนต่อ path
 const API_BASE = API_BASE_RAW.replace(/\/+$/, "");
@@ -64,14 +62,8 @@ if (!DISCORD_CLIENT_ID) throw new Error("Missing env: DISCORD_CLIENT_ID");
 console.log("[BOOT] DISCORD_GUILD_ID =", DISCORD_GUILD_ID || "(not set)");
 console.log("[BOOT] API_BASE =", API_BASE || "(not set)");
 console.log("[BOOT] API_SETROLE_PATH =", API_SETROLE_PATH);
-console.log(
-  "[BOOT] API_TOKEN =",
-  API_TOKEN ? "(set)" : "(not set)"
-);
-console.log(
-  "[BOOT] ALLOWED_ROLE_ID =",
-  FALLBACK_ALLOWED_ROLE_ID || "(not set)"
-);
+console.log("[BOOT] API_TOKEN =", API_TOKEN ? "(set)" : "(not set)");
+console.log("[BOOT] ALLOWED_ROLE_ID =", FALLBACK_ALLOWED_ROLE_ID || "(not set)");
 
 /* =======================================================
    3) HELPERS
@@ -104,7 +96,6 @@ function buildApiUrl(path) {
  * ✅ fetch แบบมี timeout + debug error ให้ละเอียด
  */
 async function apiFetch(url, options = {}) {
-  // ✅ timeout กันค้าง
   const controller = new AbortController();
   const timeoutMs = Number(process.env.API_TIMEOUT_MS || 15000);
   const t = setTimeout(() => controller.abort(), timeoutMs);
@@ -116,9 +107,7 @@ async function apiFetch(url, options = {}) {
     };
 
     // ✅ ใส่ Bearer ถ้ามี API_TOKEN
-    if (API_TOKEN) {
-      headers.Authorization = `Bearer ${API_TOKEN}`;
-    }
+    if (API_TOKEN) headers.Authorization = `Bearer ${API_TOKEN}`;
 
     const res = await fetch(url, {
       ...options,
@@ -128,17 +117,15 @@ async function apiFetch(url, options = {}) {
 
     const text = await res.text().catch(() => "");
 
-    // ✅ ถ้าไม่ ok -> โยน error พร้อมรายละเอียด
     if (!res.ok) {
-      const err = new Error(
-        `API ${res.status} ${res.statusText} | url=${url} | body=${text}`
-      );
+      const err = new Error(`API request failed`);
       err.status = res.status;
+      err.statusText = res.statusText;
+      err.url = url;
       err.body = text;
       throw err;
     }
 
-    // ✅ parse json ถ้าเป็น json ไม่ใช่ก็คืน text
     const contentType = res.headers.get("content-type") || "";
     if (contentType.includes("application/json")) {
       try {
@@ -147,6 +134,7 @@ async function apiFetch(url, options = {}) {
         return {};
       }
     }
+
     return text;
   } finally {
     clearTimeout(t);
@@ -159,11 +147,13 @@ async function apiFetch(url, options = {}) {
  */
 async function saveRoleToApi({ guildId, roleId }) {
   if (!API_BASE) {
-    throw new Error("API_BASE not set");
+    const err = new Error("API_BASE not set");
+    err.status = 0;
+    err.url = "(no url)";
+    err.body = "API_BASE is empty";
+    throw err;
   }
 
-  // ✅ ตัวอย่าง endpoint: POST {API_BASE}{API_SETROLE_PATH}
-  // payload: { guildId, roleId }
   const url = buildApiUrl(API_SETROLE_PATH);
 
   return apiFetch(url, {
@@ -178,12 +168,9 @@ async function saveRoleToApi({ guildId, roleId }) {
 
 const client = new Client({
   intents: [
+    // ✅ Slash commands อย่างเดียว ใช้แค่นี้พอ (กัน disallowed intents)
     GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMessages,
-    // ✅ ไม่ขอ GuildMembers กัน "Used disallowed intents"
-    GatewayIntentBits.MessageContent,
   ],
-  partials: [Partials.Channel],
 });
 
 /* =======================================================
@@ -195,32 +182,38 @@ const commands = [
     .setName("setrole")
     .setDescription("ตั้งค่ายศที่จะให้กับผู้ใช้ (บันทึกผ่าน API ถ้ามี)")
     .addRoleOption((opt) =>
-      opt
-        .setName("role")
-        .setDescription("เลือกยศที่จะใช้")
-        .setRequired(true)
+      opt.setName("role").setDescription("เลือกยศที่จะใช้").setRequired(true)
     ),
+
   new SlashCommandBuilder()
     .setName("showrole")
     .setDescription("ดูว่ายศที่ตั้งไว้ตอนนี้คืออะไร"),
+
+  // ✅ เพิ่ม /topic (สาเหตุที่หาย เพราะเดิมไม่มีใน commands)
+  new SlashCommandBuilder()
+    .setName("topic")
+    .setDescription("ตั้งหัวข้อ (topic) ของห้องนี้")
+    .addStringOption((opt) =>
+      opt
+        .setName("text")
+        .setDescription("ข้อความหัวข้อ (ปล่อยว่างเพื่อเคลียร์)")
+        .setRequired(false)
+    )
+    // แนะนำ: ให้เฉพาะคนมีสิทธิ Manage Channels ใช้ได้
+    .setDefaultMemberPermissions(PermissionFlagsBits.ManageChannels),
 ].map((c) => c.toJSON());
 
 async function registerCommands() {
   const rest = new REST({ version: "10" }).setToken(DISCORD_TOKEN);
 
-  // ✅ ถ้ากำหนด GUILD ให้ลงแบบ guild command (ไว)
   if (DISCORD_GUILD_ID) {
-    await rest.put(
-      Routes.applicationGuildCommands(DISCORD_CLIENT_ID, DISCORD_GUILD_ID),
-      { body: commands }
-    );
-    console.log(
-      `[CMD] Registered GUILD commands for guild=${DISCORD_GUILD_ID}`
-    );
+    await rest.put(Routes.applicationGuildCommands(DISCORD_CLIENT_ID, DISCORD_GUILD_ID), {
+      body: commands,
+    });
+    console.log(`[CMD] Registered GUILD commands for guild=${DISCORD_GUILD_ID}`);
     return;
   }
 
-  // ✅ ไม่งั้นลง global (ช้ากว่า)
   await rest.put(Routes.applicationCommands(DISCORD_CLIENT_ID), {
     body: commands,
   });
@@ -251,9 +244,7 @@ client.on("interactionCreate", async (interaction) => {
     if (interaction.commandName === "showrole") {
       const current = getAllowedRoleId(interaction.guildId);
       return interaction.editReply({
-        content: current
-          ? `✅ ยศที่ตั้งไว้ตอนนี้: <@&${current}>`
-          : "⚠️ ตอนนี้ยังไม่มีการตั้งค่า role",
+        content: current ? `✅ ยศที่ตั้งไว้ตอนนี้: <@&${current}>` : "⚠️ ตอนนี้ยังไม่มีการตั้งค่า role",
       });
     }
 
@@ -262,11 +253,8 @@ client.on("interactionCreate", async (interaction) => {
 
       // ✅ ตั้งค่า runtime ก่อน (ให้ใช้งานได้ทันที)
       runtimeAllowedRoleId = role.id;
-      if (interaction.guildId) {
-        runtimeAllowedRoleByGuild.set(interaction.guildId, role.id);
-      }
+      if (interaction.guildId) runtimeAllowedRoleByGuild.set(interaction.guildId, role.id);
 
-      // ✅ ถ้าไม่มี API_BASE -> แจ้งว่าเป็นโหมดชั่วคราว
       if (!API_BASE) {
         return interaction.editReply({
           content:
@@ -275,42 +263,70 @@ client.on("interactionCreate", async (interaction) => {
         });
       }
 
-      // ✅ มี API_BASE -> พยายามบันทึกถาวร
       try {
-        await saveRoleToApi({
-          guildId: interaction.guildId,
-          roleId: role.id,
-        });
+        await saveRoleToApi({ guildId: interaction.guildId, roleId: role.id });
 
         return interaction.editReply({
-          content:
-            `✅ ตั้งค่ายศสำเร็จและบันทึกแล้ว: <@&${role.id}>`,
+          content: `✅ ตั้งค่ายศสำเร็จและบันทึกแล้ว: <@&${role.id}>`,
         });
       } catch (err) {
-        // ✅ log แบบจัดเต็ม เพื่อให้คุณเอาไปดูใน Railway logs ได้
-        console.error("[API] Save role failed:", err?.message || err);
+        // ✅ log แบบจัดเต็ม (แยก field ชัด ๆ)
+        console.error("[API] Save role failed");
+        console.error("  url   :", err?.url);
+        console.error("  status:", err?.status, err?.statusText || "");
+        console.error("  body  :", err?.body);
 
-        // ✅ แจ้งผู้ใช้ + ยังใช้งานได้แบบ runtime
         return interaction.editReply({
           content:
             `❌ ตั้งค่ายศไม่สำเร็จ (API error)\n` +
             `แต่ผมตั้งค่าให้ใช้งานได้แบบชั่วคราวแล้ว: <@&${role.id}>\n\n` +
-            `🔎 ดูรายละเอียดใน Logs: status/body/url จะโชว์ใน console`,
+            `🔎 ดูรายละเอียดใน Logs: url/status/body`,
+        });
+      }
+    }
+
+    if (interaction.commandName === "topic") {
+      // ✅ เช็คว่าอยู่ในกิลด์ + เป็นห้องข้อความที่ตั้ง topic ได้
+      if (!interaction.guildId) {
+        return interaction.editReply({ content: "⚠️ คำสั่งนี้ใช้ได้เฉพาะในเซิร์ฟเวอร์ (guild) เท่านั้น" });
+      }
+
+      const ch = interaction.channel;
+      const canSetTopic =
+        ch &&
+        (ch.type === ChannelType.GuildText ||
+          ch.type === ChannelType.GuildAnnouncement ||
+          ch.type === ChannelType.GuildForum);
+
+      if (!canSetTopic || typeof ch?.setTopic !== "function") {
+        return interaction.editReply({ content: "⚠️ ห้องนี้ไม่รองรับการตั้ง topic" });
+      }
+
+      const text = interaction.options.getString("text") ?? "";
+
+      try {
+        await ch.setTopic(text);
+        return interaction.editReply({
+          content: text ? `✅ ตั้ง topic แล้ว:\n${text}` : "✅ เคลียร์ topic แล้ว",
+        });
+      } catch (err) {
+        console.error("[TOPIC] setTopic failed:", err?.message || err);
+        return interaction.editReply({
+          content:
+            "❌ ตั้ง topic ไม่สำเร็จ\n" +
+            "เช็คว่า บอทมีสิทธิ Manage Channels ในห้องนี้ไหม",
         });
       }
     }
 
     return interaction.editReply({ content: "⚠️ คำสั่งไม่รองรับ" });
   } catch (err) {
-    // ✅ กัน “ack ซ้ำ” และ error หลุด
     console.error("[INT] interactionCreate error:", err?.message || err);
 
     // ✅ ถ้า deferReply ไม่สำเร็จ อย่าพยายาม reply ซ้ำ
     if (interaction?.deferred || interaction?.replied) {
       try {
-        await interaction.editReply({
-          content: "❌ เกิดข้อผิดพลาดภายในระบบ",
-        });
+        await interaction.editReply({ content: "❌ เกิดข้อผิดพลาดภายในระบบ" });
       } catch {
         // เงียบไว้
       }
