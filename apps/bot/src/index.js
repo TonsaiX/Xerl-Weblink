@@ -117,7 +117,7 @@ client.on("interactionCreate", async (interaction) => {
         return interaction.editReply("❌ URL ไม่ถูกต้อง");
       }
 
-      await fetch(API_BASE + API_TOPIC_CREATE, {
+      const resp = await fetch(API_BASE + API_TOPIC_CREATE, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -131,6 +131,13 @@ client.on("interactionCreate", async (interaction) => {
           }
         })
       });
+
+      if (!resp.ok) {
+        return interaction.editReply("❌ สร้าง Topic ไม่สำเร็จ (API Error)");
+      }
+
+      const data = await resp.json(); // 👈 รับ topicId ตรงนี้
+      const topicId = data?.topicId;
 
       const embed = new EmbedBuilder()
         .setTitle(title)
@@ -148,6 +155,7 @@ client.on("interactionCreate", async (interaction) => {
         title: "📌 Topic Created",
         color: 0x2ecc71,
         fields: [
+          { name: "Topic ID", value: String(topicId ?? "-"), inline: true },
           { name: "Title", value: title, inline: false },
           { name: "URL", value: url, inline: false },
           {
