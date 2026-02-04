@@ -1,0 +1,50 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+
+  /* ✅ default fallback (จะถูก set จาก App.jsx) */
+  --bg-image: none;
+  --bg-opacity: 0.12;
+  --orange-hue: 28;
+  --glow-intensity: 0.65;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, "Helvetica Neue", Arial;
+  color: #fff;
+
+  /* ✅ Layer: overlay + image */
+  background:
+    radial-gradient(1200px 800px at 20% 10%, hsla(var(--orange-hue), 90%, 55%, 0.16), transparent 60%),
+    radial-gradient(900px 700px at 80% 20%, hsla(calc(var(--orange-hue) + 20), 90%, 60%, 0.12), transparent 60%),
+    linear-gradient(180deg, rgba(6, 6, 10, 0.25), rgba(5, 4, 7, 0.95)),
+    linear-gradient(0deg, rgba(0, 0, 0, var(--bg-opacity)), rgba(0, 0, 0, var(--bg-opacity))),
+    var(--bg-image);
+
+  background-size: cover;
+  background-position: center;
+  background-attachment: fixed;
+
+  overflow-x: hidden;
+}
+
+/* 🧼 Scrollbar สะอาด */
+*::-webkit-scrollbar {
+  width: 10px;
+}
+*::-webkit-scrollbar-thumb {
+  background: hsla(var(--orange-hue), 90%, 55%, 0.35);
+  border-radius: 999px;
+}
+*::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.35);
+}
