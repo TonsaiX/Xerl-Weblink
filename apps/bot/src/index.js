@@ -20,7 +20,9 @@ import { sendLogEmbed } from "./logToDiscord.js";
    CONFIG
 ===================================================== */
 const token = process.env.DISCORD_TOKEN;
-const apiBase = `http://localhost:${process.env.API_PORT || 8080}`;
+const apiBase =
+  process.env.API_BASE_URL || "http://localhost:8080";
+
 
 if (!token) {
   console.error("❌ Missing DISCORD_TOKEN in .env");
