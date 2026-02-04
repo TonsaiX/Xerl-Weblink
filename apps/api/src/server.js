@@ -30,3 +30,11 @@ initTables()
     console.error("[API] initTables failed", err);
     process.exit(1);
   });
+
+// กัน server ล้มแบบเงียบ ๆ
+process.on("unhandledRejection", (err) => {
+  console.error("[API unhandledRejection]", err);
+});
+process.on("uncaughtException", (err) => {
+  console.error("[API uncaughtException]", err);
+});
